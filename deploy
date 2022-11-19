@@ -1,0 +1,11 @@
+#!/bin/sh
+set -euo pipefail
+
+src=$1
+dst=$2
+
+export RCLONE_CONFIG=/dev/null
+rclone sync \
+	"$src" \
+	":b2:$dst" \
+	--b2-hard-delete

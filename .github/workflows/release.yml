@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ver: [22.03.2]
+        arch: [x86_64]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
+        with:
+          repository: ${{ secrets.PKGS_REPO }}
+          ref: ${{ secrets.PKGS_REF }}
+          token: ${{ secrets.PKGS_PAT }}
+          path: packages
+      - name: Build packages
+        env:
+          KEY_BUILD: ${{ secrets.KEY_BUILD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (umask u=r,g=,o= && echo "$KEY_BUILD" >key-build)
+          mkdir -p repo/${{matrix.ver}}
+          sudo chown -R 1000:1000 \
+            feeds.conf key-build key-build.pub repo/${{matrix.ver}}
+          docker run \
+            --rm \
+            --mount type=bind,src=$PWD/repo/${{matrix.ver}},dst=/home/build/openwrt/bin \
+            --mount type=bind,src=$PWD/feeds.conf,dst=/home/build/openwrt/feeds.conf \
+            --mount type=bind,src=$PWD/key-build,dst=/home/build/openwrt/key-build \
+            --mount type=bind,src=$PWD/key-build.pub,dst=/home/build/openwrt/key-build.pub \
+            --mount type=bind,src=$PWD/packages,dst=/packages \
+            --mount type=bind,src=$PWD/sdk-entrypoint.sh,dst=/usr/local/bin/sdk-entrypoint.sh \
+            --mount type=bind,src=$PWD/build,dst=/usr/local/bin/build \
+            --entrypoint sdk-entrypoint.sh \
+            openwrt/sdk:${{ matrix.arch }}-${{ matrix.ver }} \
+            build /packages/packages.list
+          sudo chown -R --reference=repo repo
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.ver }}-${{ matrix.arch }}
+          path: repo
+          retention-days: 1
+  deploy:
+    needs: build
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+      - name: Upload ipkg files
+        env:
+          RCLONE_B2_ACCOUNT: ${{ secrets.DEPLOY_KEY_ID }}
+          RCLONE_B2_KEY: ${{ secrets.DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          find \
+            -mindepth 2 \
+            -type f \
+            | {
+              while read -r f; do
+                ver=$(echo $f | cut -d/ -f3)
+                dir=../repo/$ver/$(dirname ${f#./*/*/})
+                mkdir -p $dir
+                mv $f $dir
+              done
+            }
+          cd ..
+
+          docker run \
+            --rm \
+            --env RCLONE_B2_ACCOUNT \
+            --env RCLONE_B2_KEY \
+            --mount type=bind,src=$PWD/repo,dst=/data/repo \
+            --mount type=bind,src=$PWD/deploy,dst=/usr/local/bin/deploy \
+            --entrypoint '' \
+            rclone/rclone:1.60 \
+            deploy repo ${{ secrets.DEPLOY_DST }}

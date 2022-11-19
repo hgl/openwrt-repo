@@ -1,0 +1,23 @@
+#!/bin/sh
+set -euo pipefail
+
+pkgs_path=$1
+cd /home/build/openwrt
+
+scripts/feeds update -a
+sed -Ei \
+	's,targets="\$\(go list \$modargs \$GO_BUILD_PKG\)",targets="$(go list $modargs "$@" $GO_BUILD_PKG)",' \
+	feeds/packages/lang/golang/golang-build.sh
+
+set --
+while read -r pkg; do
+	scripts/feeds install "$pkg"
+	set -- "$@" "package/$pkg/compile"
+done <<-EOF
+	$(grep -Ev '^#' "$pkgs_path")
+EOF
+set -- "$@" package/index
+
+nproc=$(nproc)
+make -j "$nproc" defconfig
+make -j "$nproc" V=sc "$@"

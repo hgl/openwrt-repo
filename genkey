@@ -1,0 +1,26 @@
+#!/bin/sh
+set -euo pipefail
+
+script_dir=$(dirname "$0")
+
+cd "$script_dir"
+if [ -e key-build ] && [ -e key-build.pub ]; then
+	echo >&2 "Key already exists"
+	exit
+fi
+
+docker run \
+	--rm \
+	--interactive \
+	openwrtorg/sdk:x86-64-22.03.2 \
+	sh <<-EOF | tar -x
+		set -e
+		staging_dir/host/bin/usign -G \
+			-s key-build \
+			-p key-build.pub
+		tar -c \
+			--owner 0 \
+			--group 0 \
+			key-build \
+			key-build.pub
+	EOF
